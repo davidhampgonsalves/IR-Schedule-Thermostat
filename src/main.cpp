@@ -1,8 +1,8 @@
 #include <Arduino.h>
 
 #include <ESP8266WiFi.h>
-#include <esp8266httpclient.h>
 #include <WiFiUdp.h>
+#include <WiFiClientSecure.h>
 #include <TimeLib.h>
 #include <IRrecv.h>
 #include "IRsend.h"
@@ -25,7 +25,7 @@ typedef struct {
   unsigned long lastSleepTime;
   unsigned long lastTime;
   unsigned int lastScheduleIndex;
-  String schedule;
+  char schedule[300];
 } stateStruct __attribute__((aligned(4)));
 stateStruct state;
 
@@ -54,16 +54,6 @@ void sendNTPpacket(IPAddress& address) {
 }
 
 unsigned long fetchNTPTime() {
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, pass);
-
-  while (WiFi.status() != WL_CONNECTED) { delay(100); }
-
-  Serial.print("WiFi connected: ");
-  Serial.println(WiFi.localIP());
-
   udp.begin(localPort);
   WiFi.hostByName(ntpServerName, timeServerIP);
   sendNTPpacket(timeServerIP);
@@ -90,17 +80,24 @@ unsigned long fetchNTPTime() {
   return epoch;
 }
 
-String fetchSchedule() {
-  HTTPClient http;
-  http.begin("https://github.com/davidhampgonsalves/IR-Schedule-Thermostat/");
-  String response;
-  int httpCode = http.GET();
-  if (httpCode > 0) {
-    response = http.getString();
-  }
-  http.end();
+void fetchSchedule(char *responseOut) {
+  const char sha1Fingerprint[] = "CC AA 48 48 66 46 0E 91 53 2C 9C 7C 23 2A B1 74 4D 29 9D 33";
+	const int httpsPort = 443;
+	const char* host = "raw.githubusercontent.com";
+  const char* url = "/davidhampgonsalves/IR-Schedule-Thermostat/master/schedules/1.json";
 
-  return response;
+	WiFiClientSecure client;
+  if (!client.connect(host, httpsPort))
+    Serial.println("connection failed");
+
+  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "User-Agent: Mozilla/5.0 (iPhone; U; CPU iPhone OS 4_3_3 like Mac OS X; en-us) AppleWebKit/533.17.9 (KHTML, like Gecko) Version/5.0.2 Mobile/8J2 Safari/6533.18.5\r\n" +
+               "Connection: close\r\n\r\n");
+
+	String response = client.readString();
+	String json = response.substring(response.indexOf("[") - 1);
+	json.toCharArray(responseOut, json.length());
 }
 
 void transmitScheduleSettings(JsonObject& change) {
@@ -119,7 +116,8 @@ void transmitScheduleSettings(JsonObject& change) {
   irsend.begin();
   irsend.sendGree(states[change.get<int>("temp") - 16]);
 
-  Serial.println("Sending IR command to A/C ...");
+  Serial.print("Sending IR command to A/C: ");
+  Serial.println(change.get<int>("temp"));
 }
 
 void setup() {
@@ -132,18 +130,24 @@ void setup() {
 
   // init if not deep sleep wake
   if(ESP.getResetInfoPtr()->reason != 5) {
+		WiFi.mode(WIFI_STA);
+		WiFi.begin(ssid, pass);
+		while (WiFi.status() != WL_CONNECTED) { delay(100); }
+
+    fetchSchedule(state.schedule);
+
     unsigned long currentTime = fetchNTPTime();
-    state.schedule = fetchSchedule();
     setTime(currentTime);
     adjustTime(60 * 60 * -4); // apply TZ (but not DST)
+
     state.counter = 0;
   } else
      setTime(state.lastTime + ONE_HOUR_IN_SECONDS); // this is inacurate and so is the "rtc" of the ESP but close enough
 
-  Serial.print("response: ");
+  Serial.print("schedule: ");
   Serial.println(state.schedule);
 
-  StaticJsonBuffer<200> jsonBuffer;
+  StaticJsonBuffer<500> jsonBuffer;
   JsonArray& schedule = jsonBuffer.parseArray(state.schedule);
   if (!schedule.success()) {
     Serial.print("schedule json could not be parsed: `");
@@ -153,13 +157,6 @@ void setup() {
 
   const int h = hour();
   const int m = minute();
-  Serial.print("now: ");
-  Serial.print(day());
-  Serial.print(" - ");
-  Serial.print(h);
-  Serial.print(":");
-  Serial.print(m);
-  Serial.println("");
   const int scheduleChangeCount = schedule.size();
   unsigned int scheduleIndex;
   for(int i=0 ; i < scheduleChangeCount ; i++) {
