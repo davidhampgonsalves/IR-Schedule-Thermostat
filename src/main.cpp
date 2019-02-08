@@ -14,11 +14,19 @@ extern "C" {
   #include "user_interface.h"
 }
 
+const unsigned int NODE_ID = 1;
+
 const uint16_t LED_PIN = 4;
-const char * ssid = "bang-pow"; // your network SSID (name)
-const char * pass = "mastercard";  // your network password
+const char * ssid = "bang-pow";
+const char * pass = "mastercard"; // I don't mind people using my wifi if they are in the area
+
 const unsigned long ONE_HOUR_IN_MICRO = 3.6e9;
 const unsigned long ONE_HOUR_IN_SECONDS = 60 * 60;
+
+const unsigned int HOUR = 0;
+const unsigned int MINUTE = 1;
+const unsigned int POWER = 2;
+const unsigned int TEMP = 3;
 
 typedef struct {
   unsigned int counter;
@@ -36,8 +44,8 @@ byte packetBuffer[NTP_PACKET_SIZE];
 WiFiUDP udp;
 unsigned int localPort = 2390;
 
+// from sketch examples
 void sendNTPpacket(IPAddress& address) {
-  Serial.println("sending NTP packet...");
   memset(packetBuffer, 0, NTP_PACKET_SIZE);
   packetBuffer[0] = 0b11100011;
   packetBuffer[1] = 0;
@@ -48,7 +56,7 @@ void sendNTPpacket(IPAddress& address) {
   packetBuffer[14]  = 49;
   packetBuffer[15]  = 52;
 
-  udp.beginPacket(address, 123); //NTP requests are to port 123
+  udp.beginPacket(address, 123);
   udp.write(packetBuffer, NTP_PACKET_SIZE);
   udp.endPacket();
 }
@@ -84,7 +92,7 @@ void fetchSchedule(char *responseOut) {
   const char sha1Fingerprint[] = "CC AA 48 48 66 46 0E 91 53 2C 9C 7C 23 2A B1 74 4D 29 9D 33";
 	const int httpsPort = 443;
 	const char* host = "raw.githubusercontent.com";
-  const char* url = "/davidhampgonsalves/IR-Schedule-Thermostat/master/schedules/1.json";
+  const String url = String("/davidhampgonsalves/IR-Schedule-Thermostat/master/schedules/") + NODE_ID + ".json";
 
 	WiFiClientSecure client;
   if (!client.connect(host, httpsPort))
@@ -100,7 +108,7 @@ void fetchSchedule(char *responseOut) {
 	json.toCharArray(responseOut, json.length());
 }
 
-void transmitScheduleSettings(JsonObject& change) {
+void transmitScheduleSettings(JsonArray& change) {
   // My heatpump is Gree YAA
   uint8_t states[][8] = {
     {0x0C, 0x00, 0x60, 0x50, 0x00, 0x40, 0x00, 0xA0}, // heat mode, 16 degrees
@@ -112,12 +120,18 @@ void transmitScheduleSettings(JsonObject& change) {
     {0x0C, 0x06, 0x60, 0x50, 0x00, 0x40, 0x00, 0x00},
   };
 
+	uint8_t offState[8] = {0x44, 0x05, 0x20, 0x50, 0x01, 0x40, 0x00, 0x70};
+
   IRsend irsend(LED_PIN);
   irsend.begin();
-  irsend.sendGree(states[change.get<int>("temp") - 16]);
+
+	if(change.get<int>(POWER) == false)
+		irsend.sendGree(offState);
+	else
+		irsend.sendGree(states[change.get<int>(TEMP) - 16]);
 
   Serial.print("Sending IR command to A/C: ");
-  Serial.println(change.get<int>("temp"));
+	Serial.println(change.get<int>(TEMP));
 }
 
 void setup() {
@@ -155,13 +169,11 @@ void setup() {
     Serial.println("`.");
   }
 
-  const int h = hour();
-  const int m = minute();
   const int scheduleChangeCount = schedule.size();
   unsigned int scheduleIndex;
   for(int i=0 ; i < scheduleChangeCount ; i++) {
-    const int startHour = schedule[i]["hour"];
-    const int startMinute = schedule[i]["minute"];
+    const int startHour = schedule[i][HOUR];
+    const int startMinute = schedule[i][MINUTE];
     if(hour() >= startHour && minute() >= startMinute) {
       scheduleIndex = i;
     } else
