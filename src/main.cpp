@@ -20,8 +20,8 @@ const uint16_t LED_PIN = 4;
 const char * ssid = "bang-pow";
 const char * pass = "mastercard"; // I don't mind people using my wifi if they are in the area
 
-const unsigned long ONE_HOUR_IN_MICRO = 3.6e9;
-const unsigned long ONE_HOUR_IN_SECONDS = 60 * 60;
+const unsigned long MAX_SLEEP_DURATION_IN_MINUTES=70;
+const unsigned long SYNC_INTERVAL_IN_SECONDS = 24 * 60 * 60;
 
 const unsigned int HOUR = 0;
 const unsigned int MINUTE = 1;
@@ -29,10 +29,11 @@ const unsigned int POWER = 2;
 const unsigned int TEMP = 3;
 
 typedef struct {
-  unsigned int counter;
-  unsigned long lastSleepTime;
+  unsigned long firstTime;
   unsigned long lastTime;
-  unsigned int lastScheduleIndex;
+  unsigned long lastSleepTime;
+	unsigned long sleepDurationInSeconds;
+  unsigned int lastChangeIndex;
   char schedule[300];
 } stateStruct __attribute__((aligned(4)));
 stateStruct state;
@@ -125,13 +126,14 @@ void transmitScheduleSettings(JsonArray& change) {
   IRsend irsend(LED_PIN);
   irsend.begin();
 
-	if(change.get<int>(POWER) == false)
+	if(change.get<int>(POWER) == false) {
 		irsend.sendGree(offState);
-	else
+  	Serial.println("Sending OFF command.");
+	} else {
 		irsend.sendGree(states[change.get<int>(TEMP) - 16]);
-
-  Serial.print("Sending IR command to A/C: ");
-	Serial.println(change.get<int>(TEMP));
+  	Serial.print("Sending IR command to A/C: ");
+   	Serial.println(change.get<int>(TEMP));
+	}
 }
 
 void setup() {
@@ -141,22 +143,23 @@ void setup() {
   Serial.println(ESP.getResetReason());
   Serial.println(ESP.getResetInfoPtr()->reason);
   system_rtc_mem_read(65, &state, sizeof(state));
+	const unsigned long currentTimeInSeconds = state.lastTime + state.sleepDurationInSeconds;
 
   // init if not deep sleep wake
-  if(ESP.getResetInfoPtr()->reason != 5) {
+  if(ESP.getResetInfoPtr()->reason != 5 || currentTimeInSeconds - state.firstTime > SYNC_INTERVAL_IN_SECONDS) {
 		WiFi.mode(WIFI_STA);
 		WiFi.begin(ssid, pass);
 		while (WiFi.status() != WL_CONNECTED) { delay(100); }
 
     fetchSchedule(state.schedule);
 
-    unsigned long currentTime = fetchNTPTime();
+    const unsigned long currentTime = fetchNTPTime();
     setTime(currentTime);
     adjustTime(60 * 60 * -4); // apply TZ (but not DST)
 
-    state.counter = 0;
+  	state.firstTime = now();
   } else
-     setTime(state.lastTime + ONE_HOUR_IN_SECONDS); // this is inacurate and so is the "rtc" of the ESP but close enough
+     setTime(currentTimeInSeconds); // this is inacurate and so is the "rtc" of the ESP but close enough
 
   Serial.print("schedule: ");
   Serial.println(state.schedule);
@@ -169,29 +172,51 @@ void setup() {
     Serial.println("`.");
   }
 
-  const int scheduleChangeCount = schedule.size();
-  unsigned int scheduleIndex;
-  for(int i=0 ; i < scheduleChangeCount ; i++) {
+	const uint currentHour = hour();
+	const uint currentMinute = minute();
+  const uint changeCount = schedule.size();
+  uint changeIndex;
+  for(int i=0 ; i < changeCount ; i++) {
     const int startHour = schedule[i][HOUR];
     const int startMinute = schedule[i][MINUTE];
-    if(hour() >= startHour && minute() >= startMinute) {
-      scheduleIndex = i;
-    } else
+    if(currentHour >= startHour && currentMinute >= startMinute)
+      changeIndex = i;
+    else
       break;
   }
 
-  if(state.lastScheduleIndex != scheduleIndex)
-    transmitScheduleSettings(schedule[scheduleIndex]);
+  if(state.lastChangeIndex != changeIndex)
+    transmitScheduleSettings(schedule[changeIndex]);
   else
     Serial.println("skipping IR update, current settings are the same as last run");
 
-  Serial.print("sleeping, count = ");
-  Serial.println(state.counter);
-  state.lastScheduleIndex = scheduleIndex;
-  state.counter += 1;
+  unsigned int nextChangeIndex;
+  for(int i=changeCount-1 ; i >- 0 ; i--) {
+    const uint startHour = schedule[i][HOUR];
+    const uint startMinute = schedule[i][MINUTE];
+    if(currentHour >= startHour && currentMinute >= startMinute)
+      nextChangeIndex = i;
+    else
+      break;
+  }
+
+	const JsonArray& nextChange = schedule[nextChangeIndex];
+	const uint nextChangeHour = nextChange[HOUR];
+	const uint nextChangeMinute = nextChange[MINUTE];
+	const uint minutesToSleep = nextChangeHour + ((((nextChangeIndex < changeIndex ? 24 : 0) * 60) - currentHour) * 60 ) + (nextChangeMinute - currentMinute);
+	if(minutesToSleep < MAX_SLEEP_DURATION_IN_MINUTES)
+		state.sleepDurationInSeconds = minutesToSleep * 1000 * 1000;
+	else
+		state.sleepDurationInSeconds = MAX_SLEEP_DURATION_IN_MINUTES * 60;
+
+  Serial.print("sleeping for: ");
+  Serial.print(state.sleepDurationInSeconds / 60);
+  Serial.println(" minutes ");
+
+  state.lastChangeIndex = changeIndex;
   state.lastTime = now();
   system_rtc_mem_write(65, &state, sizeof(state));
-  ESP.deepSleep(ONE_HOUR_IN_MICRO); // sleep for 1 hour
+  ESP.deepSleep(state.sleepDurationInSeconds * 1000 * 1000);
 }
 
 void loop() { }
