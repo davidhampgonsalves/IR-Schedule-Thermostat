@@ -33,8 +33,7 @@ typedef struct {
   unsigned long lastTime;
   unsigned long lastSleepTime;
 	unsigned long sleepDurationInSeconds;
-  unsigned int lastChangeIndex;
-  char schedule[300];
+  int lastChangeIndex;
 } stateStruct __attribute__((aligned(4)));
 stateStruct state;
 
@@ -106,6 +105,7 @@ void fetchSchedule(char *responseOut) {
 
 	String response = client.readString();
 	String json = response.substring(response.indexOf("[") - 1);
+
 	json.toCharArray(responseOut, json.length());
 }
 
@@ -140,10 +140,10 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println(ESP.getResetReason());
-  Serial.println(ESP.getResetInfoPtr()->reason);
-  system_rtc_mem_read(65, &state, sizeof(state));
+  system_rtc_mem_read(64, &state, sizeof(state));
 	const unsigned long currentTimeInSeconds = state.lastTime + state.sleepDurationInSeconds;
+	int scheduleMemOffset = 64 + (sizeof(state) / 4);
+  char scheduleStr[500 - (scheduleMemOffset * 4)]; // use remainder of rtc memory
 
   // init if not deep sleep wake
   if(ESP.getResetInfoPtr()->reason != 5 || currentTimeInSeconds - state.firstTime > SYNC_INTERVAL_IN_SECONDS) {
@@ -151,35 +151,35 @@ void setup() {
 		WiFi.begin(ssid, pass);
 		while (WiFi.status() != WL_CONNECTED) { delay(100); }
 
-    fetchSchedule(state.schedule);
+    fetchSchedule(scheduleStr);
+		system_rtc_mem_write(scheduleMemOffset, &scheduleStr, sizeof(scheduleStr));
 
     const unsigned long currentTime = fetchNTPTime();
     setTime(currentTime);
     adjustTime(60 * 60 * -4); // apply TZ (but not DST)
 
   	state.firstTime = now();
-  } else
-     setTime(currentTimeInSeconds); // this is inacurate and so is the "rtc" of the ESP but close enough
-
-  Serial.print("schedule: ");
-  Serial.println(state.schedule);
+  } else {
+		setTime(currentTimeInSeconds); // this is inacurate and so is the "rtc" of the ESP but close enough
+		system_rtc_mem_read(scheduleMemOffset, &scheduleStr, sizeof(scheduleStr));
+	}
 
   StaticJsonBuffer<500> jsonBuffer;
-  JsonArray& schedule = jsonBuffer.parseArray(state.schedule);
+  JsonArray& schedule = jsonBuffer.parseArray(scheduleStr); // this is destructive
   if (!schedule.success()) {
     Serial.print("schedule json could not be parsed: `");
-    Serial.print(state.schedule);
+    Serial.print(scheduleStr);
     Serial.println("`.");
   }
 
-	const uint currentHour = hour();
-	const uint currentMinute = minute();
-  const uint changeCount = schedule.size();
-  uint changeIndex;
+	const int currentHour = hour();
+	const int currentMinute = minute();
+  const int changeCount = schedule.size();
+  int changeIndex;
   for(int i=0 ; i < changeCount ; i++) {
     const int startHour = schedule[i][HOUR];
     const int startMinute = schedule[i][MINUTE];
-    if(currentHour >= startHour && currentMinute >= startMinute)
+    if(currentHour > startHour || (currentHour == startHour && currentMinute >= startMinute))
       changeIndex = i;
     else
       break;
@@ -190,32 +190,23 @@ void setup() {
   else
     Serial.println("skipping IR update, current settings are the same as last run");
 
-  unsigned int nextChangeIndex;
-  for(int i=changeCount-1 ; i >- 0 ; i--) {
-    const uint startHour = schedule[i][HOUR];
-    const uint startMinute = schedule[i][MINUTE];
-    if(currentHour >= startHour && currentMinute >= startMinute)
-      nextChangeIndex = i;
-    else
-      break;
-  }
+  int nextChangeIndex = changeIndex + 1;
+	if(nextChangeIndex >= changeCount)
+		nextChangeIndex = 0;
 
 	const JsonArray& nextChange = schedule[nextChangeIndex];
 	const uint nextChangeHour = nextChange[HOUR];
 	const uint nextChangeMinute = nextChange[MINUTE];
-	const uint minutesToSleep = nextChangeHour + ((((nextChangeIndex < changeIndex ? 24 : 0) * 60) - currentHour) * 60 ) + (nextChangeMinute - currentMinute);
+	const int minutesToSleep = ((nextChangeHour + (nextChangeIndex < changeIndex ? 24 : 0) - currentHour) * 60) + nextChangeMinute - currentMinute;
+
 	if(minutesToSleep < MAX_SLEEP_DURATION_IN_MINUTES)
 		state.sleepDurationInSeconds = minutesToSleep * 1000 * 1000;
 	else
 		state.sleepDurationInSeconds = MAX_SLEEP_DURATION_IN_MINUTES * 60;
 
-  Serial.print("sleeping for: ");
-  Serial.print(state.sleepDurationInSeconds / 60);
-  Serial.println(" minutes ");
-
   state.lastChangeIndex = changeIndex;
   state.lastTime = now();
-  system_rtc_mem_write(65, &state, sizeof(state));
+
   ESP.deepSleep(state.sleepDurationInSeconds * 1000 * 1000);
 }
 
