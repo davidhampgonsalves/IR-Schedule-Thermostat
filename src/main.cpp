@@ -20,8 +20,8 @@ const uint16_t LED_PIN = 4;
 const char * ssid = "bang-pow";
 const char * pass = "mastercard"; // I don't mind people using my wifi if they are in the area
 
-const unsigned long MAX_SLEEP_DURATION_IN_MINUTES=70;
-const unsigned long SYNC_INTERVAL_IN_SECONDS = 24 * 60 * 60;
+const unsigned long MAX_SLEEP_DURATION_IN_MINUTES = 70;
+const unsigned long SYNC_INTERVAL_IN_SECONDS = 48 * 60 * 60;
 
 const unsigned int HOUR = 0;
 const unsigned int MINUTE = 1;
@@ -29,11 +29,11 @@ const unsigned int POWER = 2;
 const unsigned int TEMP = 3;
 
 typedef struct {
+  int lastChangeIndex;
   unsigned long firstTime;
   unsigned long lastTime;
   unsigned long lastSleepTime;
 	unsigned long sleepDurationInSeconds;
-  int lastChangeIndex;
 } stateStruct __attribute__((aligned(4)));
 stateStruct state;
 
@@ -152,7 +152,7 @@ void setup() {
 		while (WiFi.status() != WL_CONNECTED) { delay(100); }
 
     fetchSchedule(scheduleStr);
-		system_rtc_mem_write(scheduleMemOffset, &scheduleStr, sizeof(scheduleStr));
+    system_rtc_mem_write(scheduleMemOffset, &scheduleStr, sizeof(scheduleStr));
 
     const unsigned long currentTime = fetchNTPTime();
     setTime(currentTime);
@@ -175,7 +175,7 @@ void setup() {
 	const int currentHour = hour();
 	const int currentMinute = minute();
   const int changeCount = schedule.size();
-  int changeIndex;
+  int changeIndex = 0;
   for(int i=0 ; i < changeCount ; i++) {
     const int startHour = schedule[i][HOUR];
     const int startMinute = schedule[i][MINUTE];
@@ -185,9 +185,10 @@ void setup() {
       break;
   }
 
-  if(state.lastChangeIndex != changeIndex)
+  if(state.lastChangeIndex != changeIndex) {
     transmitScheduleSettings(schedule[changeIndex]);
-  else
+    state.lastChangeIndex = changeIndex;
+  } else
     Serial.println("skipping IR update, current settings are the same as last run");
 
   int nextChangeIndex = changeIndex + 1;
@@ -195,8 +196,8 @@ void setup() {
 		nextChangeIndex = 0;
 
 	const JsonArray& nextChange = schedule[nextChangeIndex];
-	const uint nextChangeHour = nextChange[HOUR];
-	const uint nextChangeMinute = nextChange[MINUTE];
+	const int nextChangeHour = nextChange[HOUR];
+	const int nextChangeMinute = nextChange[MINUTE];
 	const int minutesToSleep = ((nextChangeHour + (nextChangeIndex < changeIndex ? 24 : 0) - currentHour) * 60) + nextChangeMinute - currentMinute;
 
 	if(minutesToSleep < MAX_SLEEP_DURATION_IN_MINUTES)
@@ -204,9 +205,8 @@ void setup() {
 	else
 		state.sleepDurationInSeconds = MAX_SLEEP_DURATION_IN_MINUTES * 60;
 
-  state.lastChangeIndex = changeIndex;
   state.lastTime = now();
-
+  system_rtc_mem_write(64, &state, sizeof(state));
   ESP.deepSleep(state.sleepDurationInSeconds * 1000 * 1000);
 }
 
