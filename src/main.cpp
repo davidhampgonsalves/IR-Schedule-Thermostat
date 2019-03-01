@@ -11,7 +11,7 @@
 #include <IRutils.h>
 #include <ir_Gree.h>
 extern "C" {
-  #include "user_interface.h"
+#include "user_interface.h"
 }
 
 const unsigned int NODE_ID = 1;
@@ -20,20 +20,20 @@ const uint16_t LED_PIN = 4;
 const char * ssid = "bang-pow";
 const char * pass = "mastercard"; // I don't mind people using my wifi if they are in the area
 
-const unsigned long MAX_SLEEP_DURATION_IN_MINUTES = 70;
+const long MAX_SLEEP_DURATION_IN_MINUTES = 70;
 const unsigned long SYNC_INTERVAL_IN_SECONDS = 48 * 60 * 60;
 
-const unsigned int HOUR = 0;
-const unsigned int MINUTE = 1;
-const unsigned int POWER = 2;
-const unsigned int TEMP = 3;
+const int HOUR = 0;
+const int MINUTE = 1;
+const int POWER = 2;
+const int TEMP = 3;
 
 typedef struct {
   int lastChangeIndex;
   unsigned long firstTime;
   unsigned long lastTime;
   unsigned long lastSleepTime;
-	unsigned long sleepDurationInSeconds;
+  unsigned long sleepDurationInSeconds;
 } stateStruct __attribute__((aligned(4)));
 stateStruct state;
 
@@ -70,13 +70,12 @@ unsigned long fetchNTPTime() {
   int cb;
   int counter = 0;
   while(!(cb = udp.parsePacket())) {
-    Serial.print(".");
+    Serial.println(".");
     delay(200);
     counter ++;
     if(counter > 100)
       return fetchNTPTime();
   }
-  Serial.println("");
 
   udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
   unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
@@ -89,28 +88,27 @@ unsigned long fetchNTPTime() {
 }
 
 void fetchSchedule(char *responseOut) {
-  const char sha1Fingerprint[] = "CC AA 48 48 66 46 0E 91 53 2C 9C 7C 23 2A B1 74 4D 29 9D 33";
-	const int httpsPort = 443;
-	const char* host = "raw.githubusercontent.com";
+  const int httpsPort = 443;
+  const char* host = "raw.githubusercontent.com";
   const String url = String("/davidhampgonsalves/IR-Schedule-Thermostat/master/schedules/") + NODE_ID + ".json";
 
-	WiFiClientSecure client;
+  WiFiClientSecure client;
   if (!client.connect(host, httpsPort))
     Serial.println("connection failed");
 
   client.print(String("GET ") + url + " HTTP/1.1\r\n" +
-               "Host: " + host + "\r\n" +
-               "User-Agent: Mozilla/5.0 (iPhone; U; CPU iPhone OS 4_3_3 like Mac OS X; en-us) AppleWebKit/533.17.9 (KHTML, like Gecko) Version/5.0.2 Mobile/8J2 Safari/6533.18.5\r\n" +
-               "Connection: close\r\n\r\n");
+      "Host: " + host + "\r\n" +
+      "User-Agent: Mozilla/5.0 (iPhone; U; CPU iPhone OS 4_3_3 like Mac OS X; en-us) AppleWebKit/533.17.9 (KHTML, like Gecko) Version/5.0.2 Mobile/8J2 Safari/6533.18.5\r\n" +
+      "Connection: close\r\n\r\n");
 
-	String response = client.readString();
-	String json = response.substring(response.indexOf("[") - 1);
+  String response = client.readString();
+  String json = response.substring(response.indexOf("[") - 1);
 
-	json.toCharArray(responseOut, json.length());
+  json.toCharArray(responseOut, json.length());
 }
 
 void transmitScheduleSettings(JsonArray& change) {
-  // My heatpump is Gree YAA
+  // My heatpump is Gree YAA which isn't supported so just replay captured commands
   uint8_t states[][8] = {
     {0x0C, 0x00, 0x60, 0x50, 0x00, 0x40, 0x00, 0xA0}, // heat mode, 16 degrees
     {0x0C, 0x01, 0x60, 0x50, 0x00, 0x40, 0x00, 0xB0},
@@ -121,19 +119,15 @@ void transmitScheduleSettings(JsonArray& change) {
     {0x0C, 0x06, 0x60, 0x50, 0x00, 0x40, 0x00, 0x00},
   };
 
-	uint8_t offState[8] = {0x44, 0x05, 0x20, 0x50, 0x01, 0x40, 0x00, 0x70};
+  uint8_t offState[8] = {0x44, 0x05, 0x20, 0x50, 0x01, 0x40, 0x00, 0x70};
 
   IRsend irsend(LED_PIN);
   irsend.begin();
 
-	if(change.get<int>(POWER) == false) {
-		irsend.sendGree(offState);
-  	Serial.println("Sending OFF command.");
-	} else {
-		irsend.sendGree(states[change.get<int>(TEMP) - 16]);
-  	Serial.print("Sending IR command to A/C: ");
-   	Serial.println(change.get<int>(TEMP));
-	}
+  if(change.get<int>(POWER) == false)
+    irsend.sendGree(offState);
+  else
+    irsend.sendGree(states[change.get<int>(TEMP) - 16]);
 }
 
 void setup() {
@@ -141,15 +135,15 @@ void setup() {
   delay(1000);
 
   system_rtc_mem_read(64, &state, sizeof(state));
-	const unsigned long currentTimeInSeconds = state.lastTime + state.sleepDurationInSeconds;
-	int scheduleMemOffset = 64 + (sizeof(state) / 4);
+  const unsigned long currentTimeInSeconds = state.lastTime + state.sleepDurationInSeconds;
+  int scheduleMemOffset = 64 + (sizeof(state) / 4);
   char scheduleStr[500 - (scheduleMemOffset * 4)]; // use remainder of rtc memory
 
   // init if not deep sleep wake
   if(ESP.getResetInfoPtr()->reason != 5 || currentTimeInSeconds - state.firstTime > SYNC_INTERVAL_IN_SECONDS) {
-		WiFi.mode(WIFI_STA);
-		WiFi.begin(ssid, pass);
-		while (WiFi.status() != WL_CONNECTED) { delay(100); }
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pass);
+    while (WiFi.status() != WL_CONNECTED) { delay(100); }
 
     fetchSchedule(scheduleStr);
     system_rtc_mem_write(scheduleMemOffset, &scheduleStr, sizeof(scheduleStr));
@@ -158,22 +152,21 @@ void setup() {
     setTime(currentTime);
     adjustTime(60 * 60 * -4); // apply TZ (but not DST)
 
-  	state.firstTime = now();
+    state.firstTime = now();
   } else {
-		setTime(currentTimeInSeconds); // this is inacurate and so is the "rtc" of the ESP but close enough
-		system_rtc_mem_read(scheduleMemOffset, &scheduleStr, sizeof(scheduleStr));
-	}
+    setTime(currentTimeInSeconds); // this is inacurate and so is the "rtc" of the ESP but close enough
+    system_rtc_mem_read(scheduleMemOffset, &scheduleStr, sizeof(scheduleStr));
+  }
 
   StaticJsonBuffer<500> jsonBuffer;
   JsonArray& schedule = jsonBuffer.parseArray(scheduleStr); // this is destructive
   if (!schedule.success()) {
     Serial.print("schedule json could not be parsed: `");
-    Serial.print(scheduleStr);
-    Serial.println("`.");
+    Serial.println(scheduleStr);
   }
 
-	const int currentHour = hour();
-	const int currentMinute = minute();
+  const int currentHour = hour();
+  const int currentMinute = minute();
   const int changeCount = schedule.size();
   int changeIndex = 0;
   for(int i=0 ; i < changeCount ; i++) {
@@ -192,18 +185,18 @@ void setup() {
     Serial.println("skipping IR update, current settings are the same as last run");
 
   int nextChangeIndex = changeIndex + 1;
-	if(nextChangeIndex >= changeCount)
-		nextChangeIndex = 0;
+  if(nextChangeIndex >= changeCount)
+    nextChangeIndex = 0;
 
-	const JsonArray& nextChange = schedule[nextChangeIndex];
-	const int nextChangeHour = nextChange[HOUR];
-	const int nextChangeMinute = nextChange[MINUTE];
-	const int minutesToSleep = ((nextChangeHour + (nextChangeIndex < changeIndex ? 24 : 0) - currentHour) * 60) + nextChangeMinute - currentMinute;
+  const JsonArray& nextChange = schedule[nextChangeIndex];
+  const int nextChangeHour = nextChange[HOUR];
+  const int nextChangeMinute = nextChange[MINUTE];
+  const int minutesToSleep = ((nextChangeHour + (nextChangeIndex < changeIndex ? 24 : 0) - currentHour) * 60) + nextChangeMinute - currentMinute;
 
-	if(minutesToSleep < MAX_SLEEP_DURATION_IN_MINUTES)
-		state.sleepDurationInSeconds = minutesToSleep * 1000 * 1000;
-	else
-		state.sleepDurationInSeconds = MAX_SLEEP_DURATION_IN_MINUTES * 60;
+  if(minutesToSleep < MAX_SLEEP_DURATION_IN_MINUTES)
+    state.sleepDurationInSeconds = minutesToSleep * 1000 * 1000;
+  else
+    state.sleepDurationInSeconds = MAX_SLEEP_DURATION_IN_MINUTES * 60;
 
   state.lastTime = now();
   system_rtc_mem_write(64, &state, sizeof(state));
@@ -211,4 +204,3 @@ void setup() {
 }
 
 void loop() { }
-
