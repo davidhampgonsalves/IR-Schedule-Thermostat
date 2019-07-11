@@ -10,6 +10,8 @@ This project uses an ESP8622, IR LED and a battery to download your thermostat s
 
 The ESP deep sleeps between updates so it can run on a small battery for months.
 
+More details can be found on my [blog](https://www.davidhampgonsalves.com/esp-based-scheduling-thermostat/).
+
 ## Setup
 These steps are intended for a NodeMCU v3(Lolin) but should work with slight modifications on any ESP8622.
 
